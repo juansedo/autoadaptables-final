@@ -53,6 +53,7 @@ struct Semaphore* semaphores[2];
 int start_time, time;
 int state;
 bool is_night = false;
+bool force_night = false; // Indica si el modo noche está forzado por Python
 unsigned long last_flash_time = 0;
 unsigned long last_night_switch_time = 0;
 bool flash_state = false;
@@ -187,16 +188,39 @@ void checkButton(Semaphore* s) {
   }
 }
 
+bool checkInfraredSensors() {
+  int sensors1 = digitalRead(CNY1) + digitalRead(CNY2) + digitalRead(CNY3);
+  int sensors2 = digitalRead(CNY4) + digitalRead(CNY5) + digitalRead(CNY6);
+  return (sensors1 <= 1) && (sensors2 <= 1);
+}
+
 void checkNightMode() {
-  is_night = (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
-  if (is_night && state != NIGHT_MODE) {
-    state = NIGHT_MODE;
-    // Apagar las luces verdes y amarillas al entrar en modo nocturno
+  // Lee del puerto serial si es de día o de noche
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    if (input.startsWith("CMD:")) {
+      String time_of_day = input.substring(4);
+      if (time_of_day == "NIGHT") {
+        force_night = true;
+      } else if (time_of_day == "DAY") {
+        force_night = false;
+      }
+    }
+  }
+
+  // Condición original de los sensores de luz
+  bool light_sensors = (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
+
+  // Condición de los sensores infrarrojos
+  bool infrared_sensors = checkInfraredSensors();
+
+  // El modo noche se activa si los sensores de luz y los sensores infrarrojos cumplen la condición, o si está forzado por Python y los sensores infrarrojos cumplen la condición
+  if ((light_sensors || force_night) && infrared_sensors) {
+    is_night = true;
     digitalWrite(LG1, LOW);
-    digitalWrite(LY1, LOW);
     digitalWrite(LG2, LOW);
-    digitalWrite(LY2, LOW);
-    last_night_switch_time = millis(); // Restablecer el temporizador al entrar en modo nocturno
+  } else {
+    is_night = false;
   }
 }
 
