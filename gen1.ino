@@ -208,7 +208,7 @@ void checkNightMode() {
     }
   }
 
-  // Condición original de los sensores de luz
+  // Condición de los sensores de luz
   bool light_sensors = (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
 
   // Condición de los sensores infrarrojos
@@ -260,6 +260,20 @@ void transition() {
   resetSemaphore(semaphores[1]);  
 }
 
+void nightTransition() {
+    if (s1.is_flash_mode) {
+      flashRed(&s1);
+    } else {
+      stop(&s1);
+    }
+
+    if (s2.is_flash_mode) {
+      flashRed(&s2);
+    } else {
+      stop(&s2);
+    }
+}
+
 void switchNightMode() {
   unsigned long current_time = millis();
   if (current_time - last_night_switch_time >= nightModeSwitchInterval) {
@@ -276,22 +290,11 @@ void loop() {
   checkButton(&s2);
   checkNightMode();
 
-  sendSensorData(); // Enviar los datos de los sensores
+  sendSensorData(); // Enviar los datos de los sensores por serial
 
   if (is_night) {
     switchNightMode();
-
-    if (s1.is_flash_mode) {
-      flashRed(&s1);
-    } else {
-      stop(&s1);
-    }
-
-    if (s2.is_flash_mode) {
-      flashRed(&s2);
-    } else {
-      stop(&s2);
-    }
+    nightTransition();
   } else {
     if (waitTime() < time - start_time) {
       transition();
