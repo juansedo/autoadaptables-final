@@ -1,7 +1,7 @@
 import serial
 import requests
 import time
-import datetime
+from datetime import datetime
 from constants import (
     SERIAL_PORT,
     URL,
@@ -9,12 +9,11 @@ from constants import (
 )
 
 ser = serial.Serial(SERIAL_PORT, 9600)
-url = URL
 
 def get_time_of_day():
     response = requests.get(TIME_URL)
     data = response.json()
-    current_time = datetime.datetime.fromisoformat(data['datetime'][:-1])
+    current_time = datetime.fromisoformat(data["datetime"][:-1])
     hour = current_time.hour
 
     if 6 <= hour < 18:
@@ -32,7 +31,7 @@ while True:
         line = ser.readline().decode('utf-8').strip()
         print("Datos leídos del Arduino:", line)
         
-        response = requests.post(url, data={'sensor_data': line})
+        response = requests.post(URL, data={'sensor_data': line})
         print("Respuesta del servidor:", response.status_code, response.text)
         
         time.sleep(60)

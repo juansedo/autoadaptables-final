@@ -27,7 +27,8 @@
     STOP,
     READY,
     GO,
-    HOLD
+    HOLD,
+    STANDBY
   };
   
   struct Semaphore {
@@ -86,7 +87,7 @@
     s->state = HOLD;
   }
   
-  void flashRed(Semaphore* s) {
+  void standBy(Semaphore* s) {
     unsigned long current_time = millis();
     if (current_time - last_flash_time >= flashingInterval) {
       flash_state = !flash_state;
@@ -191,7 +192,7 @@
   bool checkInfraredSensors() {
     int sensors1 = digitalRead(CNY1) + digitalRead(CNY2) + digitalRead(CNY3);
     int sensors2 = digitalRead(CNY4) + digitalRead(CNY5) + digitalRead(CNY6);
-    return (sensors1 <= 1) && (sensors2 <= 1);
+    return (sensors1 > 2) && (sensors2 > 2);
   }
   
   void checkNightMode() {
@@ -200,6 +201,7 @@
       String input = Serial.readStringUntil('\n');
       if (input.startsWith("CMD:")) {
         String time_of_day = input.substring(4);
+        Serial.println(time_of_day);
         if (time_of_day == "NIGHT") {
           force_night = true;
         } else if (time_of_day == "DAY") {
@@ -262,13 +264,13 @@
   
   void nightTransition() {
       if (s1.is_flash_mode) {
-        flashRed(&s1);
+        standBy(&s1);
       } else {
         stop(&s1);
       }
   
       if (s2.is_flash_mode) {
-        flashRed(&s2);
+        standBy(&s2);
       } else {
         stop(&s2);
       }
