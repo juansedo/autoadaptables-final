@@ -2,13 +2,17 @@ import serial
 import requests
 import time
 import datetime
+from constants import (
+    SERIAL_PORT,
+    URL,
+    TIME_URL,
+)
 
-ser = serial.Serial('/dev/ttyS0', 9600)  
-
-url = 'https://isa.requestcatcher.com/post'
+ser = serial.Serial(SERIAL_PORT, 9600)
+url = URL
 
 def get_time_of_day():
-    response = requests.get("http://worldtimeapi.org/api/timezone/Etc/UTC-5")
+    response = requests.get(TIME_URL)
     data = response.json()
     current_time = datetime.datetime.fromisoformat(data['datetime'][:-1])
     hour = current_time.hour
