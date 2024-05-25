@@ -16,8 +16,7 @@ def connect_to_serial():
     return serial.Serial(
         port=SERIAL_PORT,
         baudrate=9600,
-        write_timeout=1,
-        timeout=0
+        write_timeout=1
     )
 
 ser = connect_to_serial()
@@ -68,36 +67,35 @@ def get_time_of_day():
     else:
         raise ValueError("La respuesta de la API no contiene la clave 'datetime'")
 
-count = 0
-
 while True:
     try:
         time_of_day = get_time_of_day()
-
         send_to_serial(f"CMD:{time_of_day}")
         
         line = ser.readline().decode("utf-8", errors="ignore").strip()
-        print(f"[ardu-info] {line}")
+        # print(f"[ardu-info] {line}")
 
         sensor_data = {
             get_key(item): get_value(item)
             for item in line.split(", ")
         }
         co2_value = int(sensor_data.get("CO2", 0)) + 400
+        wait_time = int(sensor_data.get("GREEN", 0))
+        if wait_time > 0:
+            print(f"[serv] Green waits for {wait_time} ms")
         
-        if (count % 15 == 0):
-            count = 0
-            predicted_wait_time = model.predict(np.array([[co2_value]]))[0]
-            send_to_serial(f"WAIT:{int(predicted_wait_time)}")
+        predicted_wait_time = model.predict(np.array([[co2_value]]))[0]
+        send_to_serial(f"WAIT:{int(predicted_wait_time)}")
         
         response = requests.post(url, data={'sensor_data': line, 'predicted_wait_time': predicted_wait_time})
-        print("[pred-info]", response.status_code, response.text)
+        # print("[pred-info]", response.status_code, response.text)
         
-        count += 1
-        time.sleep(1)
+        time.sleep(3)
 
     except serial.SerialTimeoutException as exc:
+        print("------------------------------")
         print("[serv] Write timeout")
+        print("------------------------------")
         ser = connect_to_serial()
     except serial.SerialException as e:
         print("Error de conexión serial: ", e)

@@ -17,17 +17,16 @@
 #define LY2   26  // Yellow traffic light 2 connected in pin 26
 
 enum States {
-  A_SEMAPHORE,
-  B_SEMAPHORE,
+  DAY_MODE,
   NIGHT_MODE,
-  FLASHING_RED,
 };
 
 enum SemaphoreStates {
   STOP,
   READY,
   GO,
-  HOLD
+  HOLD,
+  OFF
 };
 
 struct Semaphore {
@@ -37,7 +36,6 @@ struct Semaphore {
   int button;
   bool button_was_pushed;
   int state;
-  bool flashing;
   bool is_flash_mode;
   int road_sensors[3];
 };
@@ -49,16 +47,22 @@ unsigned int intervalToGreen = 1000;
 unsigned int flashingInterval = 500;
 unsigned int nightModeSwitchInterval = 10000;
 
-struct Semaphore s1, s2;
-struct Semaphore* semaphores[2];
-unsigned long start_time, time, wait_green_time;
-int state;
-bool is_night = false;
-bool force_night = false; // Indica si el modo noche está forzado por Python
-unsigned long last_flash_time = 0;
-unsigned long last_night_switch_time = 0;
-bool flash_state = false;
+int state = DAY_MODE;                             /* Context state (DAY_MODE, NIGHT_MODE) */
 
+struct Semaphore s1, s2;                          /* Semaphores object */
+struct Semaphore* semaphores[2];                  /* Pointers to semaphores */
+
+unsigned long time = 0;                           /* Current time (ms) */
+unsigned long start_time = 0;                     /* Start time of state change (ms) */
+unsigned long wait_green_time = 0;                /* Duration of green light in semaphore (ms) */
+
+bool force_night = false;                         /* Night mode from Serial communication */
+unsigned long co2Interval = 0;                    /* Amount of CO2 delay from Serial communication */
+
+bool flash_state = false;                         /* Auxiliar var. for blinking effect */
+unsigned long last_night_switch_time = 0;
+
+// --------------- SEMAPHORE METHODS ----------------- 
 void go(Semaphore* s) {
   digitalWrite(s->green_led, HIGH);
   digitalWrite(s->yellow_led, LOW);
@@ -87,81 +91,71 @@ void hold(Semaphore* s) {
   s->state = HOLD;
 }
 
+void off(Semaphore* s) {
+  digitalWrite(s->green_led, LOW);
+  digitalWrite(s->yellow_led, LOW);
+  digitalWrite(s->red_led, LOW);
+  s->state = OFF;
+}
+
 void standBy(Semaphore* s) {
-  unsigned long current_time = millis();
-  if (current_time - last_flash_time >= flashingInterval) {
+  if (flashingInterval <= time - start_time) {
     flash_state = !flash_state;
-    digitalWrite(s->red_led, flash_state ? HIGH : LOW);
-    last_flash_time = current_time;
+    if(flash_state) stop(s);
+    else off(s);
+
+    start_time = time;
   }
 }
-
-void sendLog() {
-  Serial.print("LDR1: ");
-  Serial.print(analogRead(LDR1));
-  Serial.print(", LDR2: ");
-  Serial.print(analogRead(LDR2));
-  Serial.print(", GREEN: ");
-  Serial.print(wait_green_time);
-  Serial.print(", S1_ROAD: ");
-  Serial.print(!digitalRead(s1.road_sensors[0]));
-  Serial.print(!digitalRead(s1.road_sensors[1]));
-  Serial.print(!digitalRead(s1.road_sensors[2]));
-  Serial.print(", S2_ROAD: ");
-  Serial.print(!digitalRead(s2.road_sensors[0]));
-  Serial.print(!digitalRead(s2.road_sensors[1]));
-  Serial.println(!digitalRead(s2.road_sensors[2]));
+void resetSemaphore(Semaphore* s) {
+  s->button_was_pushed = false;
 }
 
+
+// --------------------- SETUP --------------------- 
 void setup() {
   Serial.begin(9600);
-  start_time = millis();
-  wait_green_time = 3000;
-  co2Interval = 0;
 
+  // First semaphore
   s1.red_led = LR1;
   s1.yellow_led = LY1;
   s1.green_led = LG1;
   s1.button = P1;
   s1.button_was_pushed = false;
-  s1.flashing = false;
   s1.is_flash_mode = true;
   s1.road_sensors[0] = CNY1;
   s1.road_sensors[1] = CNY2;
   s1.road_sensors[2] = CNY3;
-  go(&s1);
 
+  // Second semaphore
   s2.red_led = LR2;
   s2.yellow_led = LY2;
   s2.green_led = LG2;
   s2.button = P2;
   s2.button_was_pushed = false;
-  s2.flashing = false;
   s2.is_flash_mode = false;
   s2.state = STOP;
   s2.road_sensors[0] = CNY4;
   s2.road_sensors[1] = CNY5;
   s2.road_sensors[2] = CNY6;
+
   stop(&s2);
+  go(&s1);
+  start_time = millis();
 
   semaphores[0] = &s2;
   semaphores[1] = &s1;
 
-  state = A_SEMAPHORE;
-
   pinMode(LDR1, INPUT);
   pinMode(LDR2, INPUT);
-  
   pinMode(P1, INPUT_PULLUP);
   pinMode(P2, INPUT_PULLUP);
-  
   pinMode(LR1, OUTPUT);
   pinMode(LY1, OUTPUT);
   pinMode(LG1, OUTPUT);
   pinMode(LR2, OUTPUT);
   pinMode(LY2, OUTPUT);
   pinMode(LG2, OUTPUT);
-  
   pinMode(CNY1, INPUT);
   pinMode(CNY2, INPUT);
   pinMode(CNY3, INPUT);
@@ -170,18 +164,6 @@ void setup() {
   pinMode(CNY6, INPUT);
 }
 
-void checkButton(Semaphore* s) {
-  if (digitalRead(s->button) != LOW) {
-    s->button_was_pushed = true;
-    // Cambiar estado de parpadeo
-    s1.is_flash_mode = !s1.is_flash_mode;
-    s2.is_flash_mode = !s2.is_flash_mode;
-    // Restablecer el temporizador de alternancia de noche
-    last_night_switch_time = millis();
-  } else if (digitalRead(s->button) != HIGH) {
-    s->button_was_pushed = false;
-  }
-}
 
 bool isNightlight() {
   return (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
@@ -192,28 +174,63 @@ bool isRoadEmpty() {
   int sensors2 = !digitalRead(CNY4) + !digitalRead(CNY5) + !digitalRead(CNY6);
   return (sensors1 < 1) && (sensors2 < 1);
 }
-  
-void checkNightMode() {
-  // Lee del puerto serial si es de día o de noche
+
+
+// ---------------- READING INPUTS ---------------- 
+void processCmd(String input) {
+  String time_of_day = input.substring(4);
+  if (time_of_day == "NIGHT") {
+    force_night = true;
+  } else if (time_of_day == "DAY") {
+    force_night = false;
+  }
+}
+
+void processWait(String input) {
+  co2Interval = input.substring(5).toInt();
+  if (s1.state == GO) {
+    wait_green_time = calculateGreenInterval(&s1) + co2Interval;
+  } else if (s2.state == GO) {
+    wait_green_time = calculateGreenInterval(&s2) + co2Interval;
+  }
+}
+
+void readSerialMessage() {
   if (Serial.available() > 0) {
     String input = Serial.readStringUntil('\n');
-    if (input.startsWith("CMD:")) {
-      String time_of_day = input.substring(4);
-      if (time_of_day == "NIGHT") {
-        force_night = true;
-      } else if (time_of_day == "DAY") {
-        force_night = false;
-      }
-    }
+    input.trim();
+    if (input.startsWith("CMD:")) processCmd(input);
+    else if (input.startsWith("WAIT:")) processWait(input);
+  }
+}
+
+void checkButton(Semaphore* s) {
+  if (digitalRead(s->button) != LOW) {
+    s->button_was_pushed = true;
+
+    s1.is_flash_mode = !s1.is_flash_mode;
+    s2.is_flash_mode = !s2.is_flash_mode;
+
+    last_night_switch_time = millis();
+  } else if (digitalRead(s->button) != HIGH) {
+    s->button_was_pushed = false;
+  }
+}
+
+void readInputsMessage() {
+  checkButton(&s1);
+  checkButton(&s2);
+}
+
+// --------------------- TIMING ---------------------- 
+int calculateGreenInterval(Semaphore *s) {
+  int active_sensors = 0;
+  for (int i = 0; i < 3; i++) {
+    active_sensors += !digitalRead(s->road_sensors[i]);
   }
 
-  if ((isNightlight() || force_night) && isRoadEmpty()) {
-    is_night = true;
-    digitalWrite(LG1, LOW);
-    digitalWrite(LG2, LOW);
-  } else {
-    is_night = false;
-  }
+  float multiplier = active_sensors;
+  return intervalToGreen * multiplier;
 }
 
 int waitTime() {
@@ -229,14 +246,41 @@ int waitTime() {
   if (s1.state == GO) currentSemaphore = &s1;
   if (s2.state == GO) currentSemaphore = &s2;
 
-  wait_green_time = intervalToYellow - button_reducer;
+  wait_green_time = intervalToYellow - button_reducer + calculateGreenInterval(currentSemaphore) + co2Interval;
   return wait_green_time;
 }
+
+void sendLog() {
+  int ldr1_value = analogRead(LDR1);
+  int ldr2_value = analogRead(LDR2);
+  int co2_value = analogRead(CO2);
   
-void resetSemaphore(Semaphore* s) {
-  s->button_was_pushed = false;
+  int s1_road_0 = !digitalRead(s1.road_sensors[0]);
+  int s1_road_1 = !digitalRead(s1.road_sensors[1]);
+  int s1_road_2 = !digitalRead(s1.road_sensors[2]);
+  int s2_road_0 = !digitalRead(s2.road_sensors[0]);
+  int s2_road_1 = !digitalRead(s2.road_sensors[1]);
+  int s2_road_2 = !digitalRead(s2.road_sensors[2]);
+
+  Serial.print("LDR1: ");
+  Serial.print(ldr1_value);
+  Serial.print(", LDR2: ");
+  Serial.print(ldr2_value);
+  Serial.print(", GREEN: ");
+  Serial.print(wait_green_time);
+  Serial.print(", CO2: ");
+  Serial.print(co2_value);
+  Serial.print(", S1_ROAD: ");
+  Serial.print(s1_road_0);
+  Serial.print(s1_road_1);
+  Serial.print(s1_road_2);
+  Serial.print(", S2_ROAD: ");
+  Serial.print(s2_road_0);
+  Serial.print(s2_road_1);
+  Serial.println(s2_road_2);
 }
-  
+
+
 void transition() {
   stop(semaphores[0]);
   hold(semaphores[1]);
@@ -258,15 +302,36 @@ void transition() {
   resetSemaphore(semaphores[1]);  
 }
 
-void nightTransition() {
+
+void nightToDay() {
+  stop(semaphores[0]);
+  stop(semaphores[1]);
+  delay(1000);
+  go(semaphores[1]);
+  stop(semaphores[0]);
+  start_time = millis();
+  wait_green_time = 3000;
+  co2Interval = 0;
+}
+
+
+void dayState() {
+  if (waitTime() < time - start_time) {
+    transition();
+    start_time = millis();
+  }
+}
+
+
+void nightState() {
+  time = millis();
+  
   if (s1.is_flash_mode) standBy(&s1);
   else stop(&s1);
 
   if (s2.is_flash_mode) standBy(&s2);
   else stop(&s2);
-}
-
-void nightStateChange(long time) {
+  
   if (nightModeSwitchInterval <= time - last_night_switch_time) {
     s1.is_flash_mode = !s1.is_flash_mode;
     s2.is_flash_mode = !s2.is_flash_mode;
@@ -274,23 +339,28 @@ void nightStateChange(long time) {
   }
 }
 
-
+// --------------------- LOOP ---------------------- 
 void loop() {
   time = millis();
 
-  checkButton(&s1);
-  checkButton(&s2);
-  checkNightMode();
+  readInputsMessage();
+  readSerialMessage();
 
   sendLog();
 
-  if (is_night) {
-    nightTransition();
-    nightStateChange(time);
+  switch(state) {
+    case DAY_MODE:
+      dayState();
+      break;
+    case NIGHT_MODE:
+      nightState();
+      break;
+  }
+
+  if ((isNightlight() || force_night) && isRoadEmpty()) {
+    state = NIGHT_MODE;
   } else {
-    if (waitTime() < time - start_time) {
-      transition();
-      start_time = millis();
-    }
+    if (state == NIGHT_MODE) nightToDay();
+    state = DAY_MODE;
   }
 }
