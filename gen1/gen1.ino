@@ -47,14 +47,15 @@ unsigned int intervalToRed = 1000;
 unsigned int intervalToRedAndYellow = 500;
 unsigned int intervalToGreen = 1000;
 unsigned int flashingInterval = 500;
-unsigned int nightModeSwitchInterval = 10000; // Tiempo que alternan entre intermitente y bloqueado
+unsigned int nightModeSwitchInterval = 10000;
 
 struct Semaphore s1, s2;
 struct Semaphore* semaphores[2];
-int start_time, time;
+unsigned long start_time, time, wait_green_time;
 int state;
 bool is_night = false;
 bool force_night = false; // Indica si el modo noche está forzado por Python
+long co2Interval;
 unsigned long last_flash_time = 0;
 unsigned long last_night_switch_time = 0;
 bool flash_state = false;
@@ -108,17 +109,15 @@ void sendLog() {
   int s2_road_1 = !digitalRead(s2.road_sensors[1]);
   int s2_road_2 = !digitalRead(s2.road_sensors[2]);
 
-  String s1_road = " " + s1_road_0;
-  s1_road += s1_road_1;
-  s1_road += s1_road_2 + " ";
-
   Serial.print("LDR1: ");
   Serial.print(ldr1_value);
   Serial.print(", LDR2: ");
   Serial.print(ldr2_value);
+  Serial.print(", GREEN: ");
+  Serial.print(wait_green_time);
   Serial.print(", CO2: ");
   Serial.print(co2_value);
-  Serial.print(", S1_ROAD:");
+  Serial.print(", S1_ROAD: ");
   Serial.print(s1_road_0);
   Serial.print(s1_road_1);
   Serial.print(s1_road_2);
@@ -131,6 +130,8 @@ void sendLog() {
 void setup() {
   Serial.begin(9600);
   start_time = millis();
+  wait_green_time = 3000;
+  co2Interval = 0;
 
   s1.red_led = LR1;
   s1.yellow_led = LY1;
@@ -196,10 +197,14 @@ void checkButton(Semaphore* s) {
   }
 }
 
-bool checkInfraredSensors() {
-  int sensors1 = digitalRead(CNY1) + digitalRead(CNY2) + digitalRead(CNY3);
-  int sensors2 = digitalRead(CNY4) + digitalRead(CNY5) + digitalRead(CNY6);
-  return (sensors1 > 3) && (sensors2 > 3);
+bool isNightlight() {
+  return (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
+}
+
+bool isRoadEmpty() {
+  int sensors1 = !digitalRead(CNY1) + !digitalRead(CNY2) + !digitalRead(CNY3);
+  int sensors2 = !digitalRead(CNY4) + !digitalRead(CNY5) + !digitalRead(CNY6);
+  return (sensors1 < 1) && (sensors2 < 1);
 }
   
 void checkNightMode() {
@@ -216,14 +221,7 @@ void checkNightMode() {
     }
   }
 
-  // Condición de los sensores de luz
-  bool light_sensors = (analogRead(LDR1) < 100) && (analogRead(LDR2) < 100);
-
-  // Condición de los sensores infrarrojos
-  bool infrared_sensors = checkInfraredSensors();
-
-  // El modo noche se activa si los sensores de luz y los sensores infrarrojos cumplen la condición, o si está forzado por Python y los sensores infrarrojos cumplen la condición
-  if ((light_sensors || force_night) && infrared_sensors) {
+  if ((isNightlight() || force_night) && isRoadEmpty()) {
     is_night = true;
     digitalWrite(LG1, LOW);
     digitalWrite(LG2, LOW);
@@ -232,14 +230,23 @@ void checkNightMode() {
   }
 }
 
+void calculateCO2Interval() {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    if (input.startsWith("WAIT:")) {
+      co2Interval = input.substring(5).toInt();
+    }
+  }
+}
+
 int calculateGreenInterval(Semaphore *s) {
   int active_sensors = 0;
   for (int i = 0; i < 3; i++) {
     active_sensors += !digitalRead(s->road_sensors[i]);
   }
-  // Multiplicador basado en el número de sensores activos (mínimo 1.0, máximo 4.0)
+
   float multiplier = active_sensors;
-  return intervalToYellow * multiplier;
+  return intervalToGreen * multiplier;
 }
 
 int waitTime() {
@@ -254,8 +261,9 @@ int waitTime() {
   Semaphore* currentSemaphore;
   if (s1.state == GO) currentSemaphore = &s1;
   if (s2.state == GO) currentSemaphore = &s2;
-  
-  return intervalToYellow - button_reducer + calculateGreenInterval(currentSemaphore);
+
+  wait_green_time = intervalToYellow - button_reducer + calculateGreenInterval(currentSemaphore) + co2Interval;
+  return wait_green_time;
 }
   
 void resetSemaphore(Semaphore* s) {
@@ -282,42 +290,37 @@ void transition() {
   resetSemaphore(semaphores[0]);
   resetSemaphore(semaphores[1]);  
 }
-  
-void nightTransition() {
-    if (s1.is_flash_mode) {
-      standBy(&s1);
-    } else {
-      stop(&s1);
-    }
 
-    if (s2.is_flash_mode) {
-      standBy(&s2);
-    } else {
-      stop(&s2);
-    }
+void nightTransition() {
+  if (s1.is_flash_mode) standBy(&s1);
+  else stop(&s1);
+
+  if (s2.is_flash_mode) standBy(&s2);
+  else stop(&s2);
 }
 
-void switchNightMode() {
-  unsigned long current_time = millis();
-  if (current_time - last_night_switch_time >= nightModeSwitchInterval) {
+void nightStateChange(long time) {
+  if (nightModeSwitchInterval <= time - last_night_switch_time) {
     s1.is_flash_mode = !s1.is_flash_mode;
     s2.is_flash_mode = !s2.is_flash_mode;
-    last_night_switch_time = current_time;
+    last_night_switch_time = time;
   }
 }
-  
+
+
 void loop() {
   time = millis();
 
   checkButton(&s1);
   checkButton(&s2);
+  calculateCO2Interval();
   checkNightMode();
 
   sendLog();
 
   if (is_night) {
-    switchNightMode();
     nightTransition();
+    nightStateChange(time);
   } else {
     if (waitTime() < time - start_time) {
       transition();
