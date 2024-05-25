@@ -1,11 +1,18 @@
 import serial
 import requests
 import time
+from datetime import datetime
+from constants import (
+    SERIAL_PORT,
+    URL,
+    TIME_URL,
+)
 from dateutil import parser
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 import numpy as np
 
+ser = serial.Serial(SERIAL_PORT, 9600)
 ser = serial.Serial('/dev/ttyS0', 9600)  
 url = 'https://isa.requestcatcher.com/post'
 
@@ -18,8 +25,11 @@ y_train = np.array([120, 90, 60, 30, 15])  # Tiempos de espera en segundos
 model.fit(X_train, y_train)
 
 def get_time_of_day():
+    response = requests.get(TIME_URL)
     response = requests.get("http://worldtimeapi.org/api/timezone/Etc/UTC")
     data = response.json()
+    current_time = datetime.fromisoformat(data["datetime"][:-1])
+    hour = current_time.hour
  
     if 'datetime' in data:
         current_time = parser.isoparse(data["datetime"])
@@ -42,6 +52,8 @@ while True:
         
         line = ser.readline().decode('utf-8').strip()
         print("Datos leídos del Arduino:", line)
+
+        response = requests.post(URL, data={'sensor_data': line})
         
         # Extraer el valor del sensor de CO2 de los datos leídos del Arduino
         sensor_data = dict(item.split(": ") for item in line.split(", "))
